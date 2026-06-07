@@ -8,17 +8,45 @@ let serverConfig = { serverProvidesKey: false, needsUserKey: true };
 
 const $ = (sel) => document.querySelector(sel);
 
+async function loadMastersData() {
+  try {
+    const res = await fetch("/api/masters");
+    if (res.ok) {
+      const data = await res.json();
+      if (Array.isArray(data) && data.length > 0) return data;
+    }
+  } catch (_) { /* fallback below */ }
+
+  const fallback = await fetch("/static/masters.json");
+  if (!fallback.ok) throw new Error("无法加载大师数据，请刷新页面");
+  const data = await fallback.json();
+  if (!Array.isArray(data) || data.length === 0) {
+    throw new Error("大师数据为空");
+  }
+  return data;
+}
+
 async function init() {
-  const [mastersRes, configRes] = await Promise.all([
-    fetch("/api/masters"),
-    fetch("/api/config"),
-  ]);
-  masters = await mastersRes.json();
-  serverConfig = await configRes.json();
-  renderMasters();
-  bindEvents();
-  restoreSettings();
-  updateApiUI();
+  const errEl = $("#loadError");
+  try {
+    const configRes = await fetch("/api/config");
+    if (configRes.ok) serverConfig = await configRes.json();
+
+    masters = await loadMastersData();
+    renderMasters();
+    bindEvents();
+    restoreSettings();
+    updateApiUI();
+    errEl.classList.add("hidden");
+  } catch (err) {
+    console.error(err);
+    errEl.textContent = `加载失败：${err.message}。请刷新或检查网络。`;
+    errEl.classList.remove("hidden");
+    $("#mastersGrid").innerHTML =
+      '<p class="load-fail">大师列表加载失败，请刷新页面重试。</p>';
+    bindEvents();
+    restoreSettings();
+  }
 }
 
 function updateApiUI() {

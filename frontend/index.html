@@ -4,12 +4,10 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>思维圆桌 · Roundtable</title>
-  <link rel="preconnect" href="https://fonts.googleapis.com" />
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-  <link href="https://fonts.googleapis.com/css2?family=Noto+Serif+SC:wght@400;600;700&family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500;0,9..40,600;1,9..40,400&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="/static/styles.css" />
 </head>
 <body>
+  <div class="bg-mesh"></div>
   <div class="grain"></div>
 
   <header class="site-header">
@@ -31,7 +29,13 @@
         <h2>选择大师</h2>
         <p class="hint">最多选择 <strong>4</strong> 位参与本次圆桌（已选 <span id="selectedCount">0</span>/4）</p>
       </div>
-      <div class="masters-grid" id="mastersGrid"></div>
+      <div id="loadError" class="load-error hidden"></div>
+      <div class="masters-grid" id="mastersGrid">
+        <div class="skeleton-card"></div>
+        <div class="skeleton-card"></div>
+        <div class="skeleton-card"></div>
+        <div class="skeleton-card"></div>
+      </div>
     </section>
 
     <!-- Step 2: Question -->
