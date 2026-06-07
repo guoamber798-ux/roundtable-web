@@ -1,12 +1,84 @@
 const MAX_SELECT = 4;
-const STORAGE_KEY = "roundtable_api_key";
-const MODEL_KEY = "roundtable_model";
+const TOKEN_KEY = "toptalk_token";
 
 let masters = [];
 let selected = new Set();
-let serverConfig = { serverProvidesKey: false, needsUserKey: true };
+let currentUser = null;
+let appConfig = { authRequired: true };
 
 const $ = (sel) => document.querySelector(sel);
+
+function getToken() {
+  return localStorage.getItem(TOKEN_KEY);
+}
+
+function setToken(token) {
+  if (token) localStorage.setItem(TOKEN_KEY, token);
+  else localStorage.removeItem(TOKEN_KEY);
+}
+
+async function api(path, options = {}) {
+  const headers = { "Content-Type": "application/json", ...options.headers };
+  const token = getToken();
+  if (token) headers.Authorization = `Bearer ${token}`;
+  const res = await fetch(path, { ...options, headers });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.detail || data.message || "请求失败");
+  return data;
+}
+
+function showApp() {
+  $("#authGate").classList.add("hidden");
+  $("#appHeader").classList.remove("hidden");
+  $("#appMain").classList.remove("hidden");
+  $("#appFooter").classList.remove("hidden");
+  updateCreditsUI();
+}
+
+function showAuthGate() {
+  $("#authGate").classList.remove("hidden");
+  $("#appHeader").classList.add("hidden");
+  $("#appMain").classList.add("hidden");
+  $("#appFooter").classList.add("hidden");
+}
+
+function updateCreditsUI() {
+  const badge = $("#creditsBadge");
+  const modelBadge = $("#modelBadge");
+  if (!appConfig.authRequired) {
+    badge?.classList.add("hidden");
+    if (modelBadge) {
+      modelBadge.textContent = appConfig.defaultModel || "";
+      modelBadge.classList.remove("hidden");
+    }
+    return;
+  }
+  badge?.classList.remove("hidden");
+  modelBadge?.classList.add("hidden");
+  const n = currentUser?.credits ?? 0;
+  badge.textContent = `${n} 次`;
+  badge.classList.toggle("credits-zero", n < 1);
+}
+
+function applyAuthModeUI() {
+  const authOnly = document.querySelectorAll(".auth-only");
+  authOnly.forEach((el) => el.classList.toggle("hidden", !appConfig.authRequired));
+  const footer = $("#footerText");
+  if (footer) {
+    footer.textContent = appConfig.authRequired
+      ? "TopTalk领晤 · 人物设定内置 · 每次领晤消耗 1 次机会"
+      : `TopTalk领晤 · 试用模式 · ${appConfig.defaultModel || "Claude"}`;
+  }
+  if (!appConfig.authRequired) {
+    $("#authGate")?.classList.add("hidden");
+  }
+}
+
+function showAuthError(msg) {
+  const el = $("#authError");
+  el.textContent = msg;
+  el.classList.remove("hidden");
+}
 
 async function loadMastersData() {
   try {
@@ -15,61 +87,147 @@ async function loadMastersData() {
       const data = await res.json();
       if (Array.isArray(data) && data.length > 0) return data;
     }
-  } catch (_) { /* fallback below */ }
-
+  } catch (_) {}
   const fallback = await fetch("/static/masters.json");
-  if (!fallback.ok) throw new Error("无法加载大师数据，请刷新页面");
-  const data = await fallback.json();
-  if (!Array.isArray(data) || data.length === 0) {
-    throw new Error("大师数据为空");
-  }
-  return data;
+  if (!fallback.ok) throw new Error("无法加载大师数据");
+  return fallback.json();
 }
 
-async function init() {
-  const errEl = $("#loadError");
+async function initApp() {
   try {
-    const configRes = await fetch("/api/config");
-    if (configRes.ok) serverConfig = await configRes.json();
-
     masters = await loadMastersData();
     renderMasters();
-    bindEvents();
-    restoreSettings();
-    updateApiUI();
-    errEl.classList.add("hidden");
+    bindAppEvents();
+    $("#loadError").classList.add("hidden");
   } catch (err) {
-    console.error(err);
-    errEl.textContent = `加载失败：${err.message}。请刷新或检查网络。`;
-    errEl.classList.remove("hidden");
-    $("#mastersGrid").innerHTML =
-      '<p class="load-fail">大师列表加载失败，请刷新页面重试。</p>';
-    bindEvents();
-    restoreSettings();
+    $("#loadError").textContent = `加载失败：${err.message}`;
+    $("#loadError").classList.remove("hidden");
   }
 }
 
-function updateApiUI() {
-  const btn = $("#btnSettings");
-  const desc = $("#settingsDesc");
-  if (serverConfig.serverProvidesKey) {
-    btn.textContent = "✓ 已就绪";
-    btn.title = "本站已配置 AI，直接使用即可";
-    if (desc) {
-      desc.textContent =
-        "本站已由站长配置 AI 能力，你无需安装 nuwa 或填写 API Key，直接使用即可。" +
-        (serverConfig.rateLimitPerHour
-          ? `（每小时限 ${serverConfig.rateLimitPerHour} 次）`
-          : "");
-    }
-  } else {
-    btn.textContent = "⚙ API";
-    btn.title = "请设置 OpenAI API Key";
-    if (desc) {
-      desc.textContent =
-        "本站未配置服务端 Key，请填写你的 OpenAI API Key。Key 仅存本机浏览器。";
-    }
+async function bootstrap() {
+  bindAuthEvents();
+  try {
+    appConfig = await fetch("/api/config").then((r) => r.json());
+  } catch {
+    appConfig = { authRequired: true };
   }
+  applyAuthModeUI();
+
+  if (!appConfig.authRequired) {
+    currentUser = { username: "guest", credits: 999 };
+    showApp();
+    await initApp();
+    return;
+  }
+
+  const token = getToken();
+  if (!token) {
+    showAuthGate();
+    return;
+  }
+  try {
+    currentUser = await api("/api/auth/me");
+    showApp();
+    await initApp();
+  } catch {
+    setToken(null);
+    showAuthGate();
+  }
+}
+
+function bindAuthEvents() {
+  document.querySelectorAll(".auth-tab").forEach((tab) => {
+    tab.addEventListener("click", () => {
+      document.querySelectorAll(".auth-tab").forEach((t) => t.classList.remove("active"));
+      tab.classList.add("active");
+      const isLogin = tab.dataset.tab === "login";
+      $("#loginForm").classList.toggle("hidden", !isLogin);
+      $("#registerForm").classList.toggle("hidden", isLogin);
+      $("#authError").classList.add("hidden");
+    });
+  });
+
+  $("#loginForm").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    $("#authError").classList.add("hidden");
+    try {
+      const data = await api("/api/auth/login", {
+        method: "POST",
+        body: JSON.stringify({
+          username: $("#loginUser").value.trim(),
+          password: $("#loginPass").value,
+        }),
+      });
+      setToken(data.token);
+      currentUser = data.user;
+      showApp();
+      await initApp();
+    } catch (err) {
+      showAuthError(err.message);
+    }
+  });
+
+  $("#registerForm").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    $("#authError").classList.add("hidden");
+    try {
+      const data = await api("/api/auth/register", {
+        method: "POST",
+        body: JSON.stringify({
+          username: $("#regUser").value.trim(),
+          password: $("#regPass").value,
+        }),
+      });
+      setToken(data.token);
+      currentUser = data.user;
+      showApp();
+      await initApp();
+      alert("注册成功！请兑换口令获取领晤次数。");
+      $("#redeemModal").showModal();
+    } catch (err) {
+      showAuthError(err.message);
+    }
+  });
+}
+
+function bindAppEvents() {
+  $("#questionInput").addEventListener("input", updateSelectionUI);
+  $("#btnStart").addEventListener("click", startDiscussion);
+  $("#btnReset").addEventListener("click", resetUI);
+  $("#btnLogout").addEventListener("click", () => {
+    setToken(null);
+    currentUser = null;
+    selected.clear();
+    location.reload();
+  });
+
+  $("#btnRedeem").addEventListener("click", () => {
+    $("#redeemCodeInput").value = "";
+    $("#redeemError").classList.add("hidden");
+    $("#redeemModal").showModal();
+  });
+
+  $("#btnRedeemCancel").addEventListener("click", () => $("#redeemModal").close());
+
+  $("#redeemForm").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    $("#redeemError").classList.add("hidden");
+    try {
+      const data = await api("/api/auth/redeem", {
+        method: "POST",
+        body: JSON.stringify({ code: $("#redeemCodeInput").value.trim() }),
+      });
+      currentUser.credits = data.credits;
+      updateCreditsUI();
+      $("#redeemModal").close();
+      alert(data.message);
+    } catch (err) {
+      const el = $("#redeemError");
+      el.textContent = err.message;
+      el.classList.remove("hidden");
+    }
+  });
 }
 
 function renderMasters() {
@@ -86,7 +244,6 @@ function renderMasters() {
       <div class="master-detail">
         <p>${m.bio}</p>
         <p style="margin-top:0.4rem"><strong>擅长：</strong>${m.expertise.join("、")}</p>
-        <p style="margin-top:0.25rem"><strong>适合讨论：</strong>${m.topics}</p>
       </div>
     </button>`
     )
@@ -98,84 +255,40 @@ function renderMasters() {
 }
 
 function toggleMaster(id) {
-  if (selected.has(id)) {
-    selected.delete(id);
-  } else {
-    if (selected.size >= MAX_SELECT) return;
-    selected.add(id);
-  }
+  if (selected.has(id)) selected.delete(id);
+  else if (selected.size < MAX_SELECT) selected.add(id);
   updateSelectionUI();
 }
 
 function updateSelectionUI() {
   $("#selectedCount").textContent = selected.size;
-
   document.querySelectorAll(".master-card").forEach((card) => {
     const id = card.dataset.id;
     const isSelected = selected.has(id);
     const isDisabled = !isSelected && selected.size >= MAX_SELECT;
-
     card.classList.toggle("selected", isSelected);
     card.classList.toggle("disabled", isDisabled);
     card.setAttribute("aria-pressed", isSelected);
     card.querySelector(".check").textContent = isSelected ? "✓" : "";
   });
-
   const q = $("#questionInput").value.trim();
-  $("#btnStart").disabled = selected.size < 2 || q.length < 4;
-}
-
-function bindEvents() {
-  $("#questionInput").addEventListener("input", updateSelectionUI);
-
-  $("#btnStart").addEventListener("click", startDiscussion);
-  $("#btnReset").addEventListener("click", resetUI);
-
-  $("#btnSettings").addEventListener("click", () => {
-    $("#apiKeyInput").value = localStorage.getItem(STORAGE_KEY) || "";
-    $("#modelSelect").value = localStorage.getItem(MODEL_KEY) || "gpt-4o-mini";
-    $("#settingsModal").showModal();
-  });
-
-  $("#settingsModal").addEventListener("close", () => {
-    const key = $("#apiKeyInput").value.trim();
-    const model = $("#modelSelect").value;
-    if (key) localStorage.setItem(STORAGE_KEY, key);
-    localStorage.setItem(MODEL_KEY, model);
-  });
-
-  $("#btnClearKey").addEventListener("click", () => {
-    localStorage.removeItem(STORAGE_KEY);
-    $("#apiKeyInput").value = "";
-  });
-}
-
-function restoreSettings() {
-  const model = localStorage.getItem(MODEL_KEY);
-  if (model) $("#modelSelect").value = model;
+  const hasCredits = !appConfig.authRequired || (currentUser?.credits ?? 0) >= 1;
+  $("#btnStart").disabled = selected.size < 2 || q.length < 4 || !hasCredits;
+  if (appConfig.authRequired && !hasCredits && selected.size >= 2 && q.length >= 4) {
+    $("#btnStart").title = "领晤次数不足，请先兑换口令";
+  } else {
+    $("#btnStart").title = "";
+  }
 }
 
 async function startDiscussion() {
+  if (appConfig.authRequired && (currentUser?.credits ?? 0) < 1) {
+    alert("领晤次数不足，请先兑换口令");
+    $("#redeemModal").showModal();
+    return;
+  }
+
   const question = $("#questionInput").value.trim();
-  const apiKey = serverConfig.serverProvidesKey
-    ? null
-    : localStorage.getItem(STORAGE_KEY);
-  const model =
-    localStorage.getItem(MODEL_KEY) ||
-    serverConfig.defaultModel ||
-    "gpt-4o-mini";
-
-  if (serverConfig.needsUserKey && !apiKey) {
-    alert("请先在右上角 ⚙ API 中设置 OpenAI API Key");
-    $("#settingsModal").showModal();
-    return;
-  }
-
-  if (selected.size < 2) {
-    alert("请至少选择 2 位大师");
-    return;
-  }
-
   const overlay = $("#loadingOverlay");
   overlay.classList.remove("hidden");
   const steps = [
@@ -191,25 +304,23 @@ async function startDiscussion() {
   }, 25000);
 
   try {
-    const res = await fetch("/api/discuss", {
+    const data = await api("/api/discuss", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         question,
         participants: [...selected],
-        ...(apiKey ? { api_key: apiKey } : {}),
-        model,
       }),
     });
-
-    const data = await res.json();
-    if (!res.ok) throw new Error(data.detail || "请求失败");
-
+    if (data.creditsRemaining !== undefined) {
+      currentUser.credits = data.creditsRemaining;
+      updateCreditsUI();
+    }
     renderResults(data);
     $("#stepResults").classList.remove("hidden");
     $("#stepResults").scrollIntoView({ behavior: "smooth" });
   } catch (err) {
-    alert("圆桌失败：" + err.message);
+    alert("领晤失败：" + err.message);
+    if (err.message.includes("次数不足")) $("#redeemModal").showModal();
   } finally {
     clearInterval(stepTimer);
     overlay.classList.add("hidden");
@@ -218,58 +329,32 @@ async function startDiscussion() {
 
 function renderResults(data) {
   const names = data.participants.map((p) => `${p.avatar} ${p.name}`).join("、");
-
   let html = `
     <div class="result-header">
-      <h3>思维圆桌对谈</h3>
+      <h3>TopTalk 领晤实录</h3>
       <p class="result-question">${escapeHtml(data.question)}</p>
       <p class="result-participants">参与者：${names}</p>
-    </div>
-  `;
+    </div>`;
 
-  html += `<div class="round-section">
-    <div class="round-title">第一轮 · 初始观点</div>`;
+  html += `<div class="round-section"><div class="round-title">第一轮 · 初始观点</div>`;
   for (const u of data.round1) {
     const p = data.participants.find((x) => x.id === u.speakerId);
     html += utteranceHtml(p?.avatar || "◉", u.speaker, null, u.content);
   }
-  html += `</div>`;
-
-  html += `<div class="round-section">
-    <div class="round-title">第二轮 · 反驳与共识</div>`;
+  html += `</div><div class="round-section"><div class="round-title">第二轮 · 反驳与共识</div>`;
   for (const u of data.round2) {
     const p = data.participants.find((x) => x.id === u.speakerId);
     html += utteranceHtml(p?.avatar || "◉", u.speaker, u.target, u.content);
   }
-  html += `</div>`;
-
-  html += `
-    <div class="consensus-block">
-      <h4>◉ 共识收敛</h4>
-      <div class="consensus-body">${formatConsensus(data.consensus)}</div>
-    </div>
-  `;
+  html += `</div><div class="consensus-block"><h4>◈ 共识收敛</h4><div class="consensus-body">${formatConsensus(data.consensus)}</div></div>`;
 
   $("#resultsContent").innerHTML = html;
-
-  const countEl = $("#charCount");
-  countEl.textContent = data.totalChars;
-  countEl.parentElement.classList.toggle("over", data.totalChars > 3500);
+  $("#charCount").textContent = data.totalChars;
 }
 
 function utteranceHtml(avatar, speaker, target, content) {
-  const targetLine = target
-    ? `<span class="utterance-target">→ 回应 ${escapeHtml(target)}</span>`
-    : "";
-  return `
-    <div class="utterance">
-      <div class="utterance-head">
-        <span>${avatar}</span>
-        <span>${escapeHtml(speaker)}</span>
-        ${targetLine}
-      </div>
-      <div class="utterance-body">${escapeHtml(content)}</div>
-    </div>`;
+  const targetLine = target ? `<span class="utterance-target">→ 回应 ${escapeHtml(target)}</span>` : "";
+  return `<div class="utterance"><div class="utterance-head"><span>${avatar}</span><span>${escapeHtml(speaker)}</span>${targetLine}</div><div class="utterance-body">${escapeHtml(content)}</div></div>`;
 }
 
 function formatConsensus(md) {
@@ -296,4 +381,4 @@ function resetUI() {
   window.scrollTo({ top: 0, behavior: "smooth" });
 }
 
-init();
+bootstrap();
