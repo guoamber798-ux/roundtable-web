@@ -1,0 +1,18 @@
+# Render.com 一键部署：https://render.com
+# Dashboard → New → Blueprint → 连接本仓库
+
+services:
+  - type: web
+    name: roundtable-web
+    runtime: docker
+    plan: free
+    healthCheckPath: /api/config
+    envVars:
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: DEFAULT_MODEL
+        value: gpt-4o-mini
+      - key: RATE_LIMIT_PER_HOUR
+        value: "8"
+      - key: PORT
+        value: "8765"
