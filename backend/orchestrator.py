@@ -1,4 +1,4 @@
-"""圆桌对谈编排：内置人物设定，无需本地 nuwa Skill。"""
+"""TopTalk领晤编排：内置人物设定，无需本地 nuwa Skill。"""
 
 from __future__ import annotations
 
@@ -6,7 +6,7 @@ import copy
 import json
 from pathlib import Path
 
-from openai import OpenAI
+from llm import chat as llm_chat
 
 DATA_DIR = Path(__file__).resolve().parent.parent / "data"
 MAX_OUTPUT_CHARS = 3500
@@ -45,23 +45,6 @@ def load_system_prompt(master_id: str) -> str:
     )
 
 
-def _client(api_key: str) -> OpenAI:
-    return OpenAI(api_key=api_key)
-
-
-def _chat(client: OpenAI, model: str, system: str, user: str, max_tokens: int = 512) -> str:
-    resp = client.chat.completions.create(
-        model=model,
-        messages=[
-            {"role": "system", "content": system},
-            {"role": "user", "content": user},
-        ],
-        temperature=0.85,
-        max_tokens=max_tokens,
-    )
-    return (resp.choices[0].message.content or "").strip()
-
-
 def _truncate(text: str, limit: int) -> str:
     if len(text) <= limit:
         return text
@@ -86,7 +69,9 @@ def run_roundtable(
 ) -> dict:
     masters = {m["id"]: m for m in load_masters()}
     participants = [masters[pid] for pid in participant_ids]
-    client = _client(api_key)
+
+    def _chat(system: str, user: str, max_tokens: int = 512) -> str:
+        return llm_chat(api_key, model, system, user, max_tokens)
 
     round1: list[dict] = []
     prior: list[dict] = []
@@ -95,7 +80,7 @@ def run_roundtable(
         m = masters[pid]
         system = load_system_prompt(pid)
         prior_text = _format_prior(prior) if prior else "（你是第一位发言者）"
-        user = f"""思维圆桌对谈。主题：{question}
+        user = f"""TopTalk领晤对谈。主题：{question}
 
 已有发言：
 {prior_text}
@@ -105,7 +90,7 @@ def run_roundtable(
 - 严格控制在 {PER_SPEAKER_CHARS} 字以内
 - 观点鲜明，不要免责声明
 - 不要 meta 分析"""
-        content = _truncate(_chat(client, model, system, user, max_tokens=400), PER_SPEAKER_CHARS)
+        content = _truncate(_chat(system, user, max_tokens=400), PER_SPEAKER_CHARS)
         entry = {"speaker": m["name"], "speakerId": pid, "content": content}
         round1.append(entry)
         prior.append(entry)
@@ -119,7 +104,7 @@ def run_roundtable(
         target_pid = participant_ids[(i - 1) % n]
         target = r1_by_id[target_pid]
         system = load_system_prompt(pid)
-        user = f"""思维圆桌第二轮。主题：{question}
+        user = f"""TopTalk领晤第二轮。主题：{question}
 
 第一轮全部发言：
 {_format_prior(round1)}
@@ -127,7 +112,7 @@ def run_roundtable(
 请 specifically 回应【{target['speaker']}】在第一轮的观点。
 必须包含：1) 反驳或质疑 2) 共识或补充
 控制在 {PER_SPEAKER_CHARS} 字以内，第一人称，保持角色。"""
-        content = _truncate(_chat(client, model, system, user, max_tokens=400), PER_SPEAKER_CHARS)
+        content = _truncate(_chat(system, user, max_tokens=400), PER_SPEAKER_CHARS)
         round2.append({
             "speaker": m["name"],
             "speakerId": pid,
@@ -137,9 +122,7 @@ def run_roundtable(
 
     names = "、".join(p["name"] for p in participants)
     consensus_raw = _chat(
-        client,
-        model,
-        "你是思维圆桌主持人，负责提炼共识。输出简洁的中文 Markdown。",
+        "你是TopTalk领晤主持人，负责提炼共识。输出简洁的中文 Markdown。",
         f"""主题：{question}
 参与者：{names}
 
